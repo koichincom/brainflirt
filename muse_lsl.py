@@ -27,28 +27,23 @@ def get_inlet():
 
     return _inlet
 
-# TODO: Adjust it to the needs ()
-'''
-get average of af7 and af8 channels
-'''
-def get_raw_eeg(duration_sec=10, fs=256):
+
+def get_raw_eeg_all_channels(duration_sec=10, fs=256):
+
     inlet = get_inlet()
     n_samples = int(duration_sec * fs)
     data = []
-    
+
     for _ in range(n_samples):
         try:
-            sample, timestamp = inlet.pull_sample(timeout=0.1)
+            sample = inlet.pull_sample(timeout=0.1)
             if sample is not None:
-                af7 = sample[1]
-                af8 = sample[2]
-                average = (af7 + af8) / 2
-                data.append(average)
+                data.append(sample)
         except Exception as e:
             print(f"Error pulling sample: {e}")
-    
+
     if not data:
-        print("Warning: No LSL data received, returning random data")
-        pass
-        
-    return np.array(data)
+        print("WARNING: No data received. Check the connection.")
+        return
+
+    return np.array(data) # [tp9, af7, af8, tp10]
