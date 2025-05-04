@@ -1,17 +1,13 @@
 import tkinter as tk
 from tkinter import ttk
-import webbrowser
-import pyautogui
-import urllib.parse
 import threading
 import pyperclip
+import datetime
+from datetime import datetime
 
-user_1_state = "normal"
-user_2_state = "disabled"
-copy_prompt_state = "disabled"
-
-session_of_conversation = 5 # 5 times of conversation is considered 1 session
-counter_for_session = 0 # counter should be set to 0 by default
+import src.muse_lsl
+import src.engagement_predictor
+from src.engagement_predictor import predict_engagement
 
 def main():
     app = Application()
@@ -33,18 +29,35 @@ class Application(tk.Tk):
         
         # Create main frame with padding
         self.main_frame = Main(self)
-        self.main_frame.grid(row=0, column=0, padx=20, pady=20)  # Changed from pack() to grid()
+        self.main_frame.grid(row=0, column=0, padx=20, pady=20)
 
 class Main(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         
         # Configure grid weights for the main frame
-        self.grid_rowconfigure(3, weight=1)  # Add weight to row between buttons and copy prompt
-        self.grid_columnconfigure(1, weight=1)  # Center horizontally
+        self.grid_rowconfigure(3, weight=1)
+        self.grid_columnconfigure(1, weight=1)
         
-        global user_1_state, user_2_state, copy_prompt_state
+        # Manage states as instance variables
+        self.states = {
+            "user_1": "normal",
+            "user_2": "disabled",
+            "copy_prompt": "disabled"
+        }
+        
+        # Session management instance variables
+        self.session_counter = 0
+        self.session_max = 5  # 5 rounds per session
+        
+        # Track session timing and engagement result
+        self.session_start_time = None
+        self.current_engagement = "normal"
+        
         self.conversation_history = []
+
+        # Buffer for raw feature vectors per utterance
+        self.engagement_feature_buffer = []
 
         # User 1 Label, Entry, and Button
         self.label_user_1 = ttk.Label(self, text="User 1")
@@ -53,7 +66,7 @@ class Main(ttk.Frame):
         self.entry_user_1.grid(row=0, column=1, padx=10, pady=10)
 
         self.entry_user_1.bind("<Return>", lambda event: self.submit_user_1_text())
-        self.submit_button_1 = ttk.Button(self, text="Submit", command=self.submit_user_1_text, state=user_1_state)
+        self.submit_button_1 = ttk.Button(self, text="Submit", command=self.submit_user_1_text, state=self.states["user_1"])
         self.submit_button_1.grid(row=0, column=2, padx=10, pady=10)
 
         # User 2 Label, Entry, and Button
@@ -63,26 +76,22 @@ class Main(ttk.Frame):
         self.entry_user_2.grid(row=1, column=1, padx=10, pady=10)
 
         self.entry_user_2.bind("<Return>", lambda event: self.submit_user_2_text())
-        self.submit_button_2 = ttk.Button(self, text="Submit", command=self.submit_user_2_text, state=user_2_state)
+        self.submit_button_2 = ttk.Button(self, text="Submit", command=self.submit_user_2_text, state=self.states["user_2"])
         self.submit_button_2.grid(row=1, column=2, padx=10, pady=10)
 
         # Copy Prompt Button
-        self.copy_prompt_button = ttk.Button(self, text="Copy GPT Prompt", command=self.copy_prompt_to_clipboard, state=copy_prompt_state)
+        self.copy_prompt_button = ttk.Button(self, text="Copy GPT Prompt", command=self.copy_prompt_to_clipboard, state=self.states["copy_prompt"])
         self.copy_prompt_button.grid(row=4, column=0, columnspan=3, pady=(20,10), sticky="ew")
 
     def apply_state(self):
-        global user_1_state, user_2_state, copy_prompt_state
-        
-        self.submit_button_1.config(state=user_1_state)
-        self.submit_button_2.config(state=user_2_state)
-        self.copy_prompt_button.config(state=copy_prompt_state)
-
+        # Apply state
+        self.submit_button_1.config(state=self.states["user_1"])
+        self.submit_button_2.config(state=self.states["user_2"])
+        self.copy_prompt_button.config(state=self.states["copy_prompt"])
 
     def submit_user_1_text(self):
-        global user_1_state, user_2_state
-        
-        if user_1_state == "normal":
-            user_input = self.entry_user_1.get().strip()  # Remove whitespace
+        if self.states["user_1"] == "normal":
+            user_input = self.entry_user_1.get().strip()
             
             if not user_input:
                 return
@@ -90,17 +99,20 @@ class Main(ttk.Frame):
             print(f"User 1 submitted: {user_input}")
             self.conversation_history.append(f"User 1: {user_input}")
 
-            user_1_state = "disabled"
-            user_2_state = "normal"
+            self.states["copy_prompt"] = "disabled"
+            self.states["user_1"] = "disabled"
+            self.states["user_2"] = "normal"
             self.apply_state()
             
             self.entry_user_1.delete(0, tk.END)
             self.entry_user_2.focus_set()
 
+            if self.session_counter == 0:
+                # mark the start time of a new session
+                self.session_start_time = datetime.now()
+
     def submit_user_2_text(self):
-        global user_1_state, user_2_state, copy_prompt_state, counter_for_session, session_of_conversation
-        
-        if user_2_state == "normal":
+        if self.states["user_2"] == "normal":
             user_input = self.entry_user_2.get().strip()
             
             if not user_input:
@@ -108,57 +120,64 @@ class Main(ttk.Frame):
                 
             print(f"User 2 submitted: {user_input}")
             self.conversation_history.append(f"User 2: {user_input}")
-            
-            user_2_state = "disabled"
-            user_1_state = "normal"
-            self.apply_state()
 
             self.entry_user_2.delete(0, tk.END)
-            self.entry_user_1.focus_set()  # Replace pyautogui with direct focus
+            self.entry_user_1.focus_set()
 
-            counter_for_session += 1
-        
-        if counter_for_session % session_of_conversation == 0:
-            print("hey!!")
-            copy_prompt_state = "normal"
-            user_1_state = "disabled"
-            user_2_state = "disabled"
-            self.apply_state()
+            # Increment session counter
+            self.session_counter += 1
 
-            try:
-                self.copy_prompt_to_clipboard()
-            except Exception as e:
-                print(f"Error copying prompt to clipboard: {e}")
-                copy_prompt_state = "disabled"
+            # When the session is complete, compute engagement using Muse2 data
+            if self.session_counter == self.session_max:
+                elapsed_sec = max(1, int((datetime.now() - self.session_start_time).total_seconds()))
+                try:
+                    features = src.muse_lsl.get_current_features(duration_sec=elapsed_sec)
+                    self.current_engagement = predict_engagement(features)
+                except Exception as e:
+                    print(f"[ENGAGEMENT] fallback due to error: {e}")
+                    self.current_engagement = "normal"
+
+                self.states["copy_prompt"] = "normal"
+                self.states["user_1"] = "disabled"
+                self.states["user_2"] = "disabled"
                 self.apply_state()
-                return
-            
-            copy_prompt_state = "disabled"
-            user_1_state = "normal"
-            user_2_state = "disabled"
-            self.apply_state()
-
+            else:
+                self.states["copy_prompt"] = "disabled"
+                self.states["user_1"] = "normal"
+                self.states["user_2"] = "disabled"
+                self.apply_state()
 
     def copy_prompt_to_clipboard(self):
-        engagement = "normal"
         conversation_script = "\n".join(self.conversation_history)
 
-        prompt = self.generate_prompt(engagement, conversation_script)
-        encoded_prompt = urllib.parse.quote(prompt)
-        pyperclip.copy(encoded_prompt)
+        prompt = self.generate_prompt(conversation_script)
+        pyperclip.copy(prompt)
+        print("Prompt copied to clipboard!")
+        
+        # Reset session
+        self.session_counter = 0
+        self.states["copy_prompt"] = "disabled"
+        self.states["user_1"] = "normal"
+        self.states["user_2"] = "disabled"
+        self.apply_state()
 
-    def generate_prompt(self, engagement, conversation_script):
+        self.conversation_history.clear()
+
+    def generate_prompt(self, conversation_script):
+        engagement = self.current_engagement
         prompt = f"""
-        Based on the conversation script, and the user 2's engagement level since the last interaction, 
-        please provide advice to user 1 on what to talk about next.
-        The conversation script is a dialogue between user 1 and user 2,
-        and the engagement level is a measure of how engaged user 2 has been since the last exchange.
-        Please provide a response that is appropriate for the user's engagement level.
-        Suggest a few topics or questions that user 2 might be interested in discussing.
-        Also provide short insights about the conversation dynamics.
+        Based on the conversation script for this session and user 2's engagement level, please provide advice to user 1 on what to talk about next.
+        The conversation script is a dialogue between user 1 and user 2 for this session, and it is a continuation of the last prompt I gave you (if this is not the first prompt).
+        The engagement level measures how engaged user 2 has been during this session, with three levels: low, normal, and high.
+        To analyze changes in user 2's engagement level, you should consider the past engagement levels provided in previous prompts (if this is not the first prompt).
 
-        The user 2's engagement level since the last interaction is: {engagement}.
-        The conversation script so far is:
+        Please format the output as follows:
+        1. Suggest a few topics or questions that user 2 might be interested in discussing.
+        2. Provide short insights about the conversation dynamics.
+        Keep the response simple and easy to understand.
+
+        User 2's engagement level for this session is: {engagement}.
+        The conversation script for this session is:\n
         {conversation_script}
         """
         return prompt
