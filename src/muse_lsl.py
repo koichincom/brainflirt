@@ -20,14 +20,17 @@ def get_inlet(timeout=3):
 
     print("Resolving EEG streams…")
     streams = resolve_streams(wait_time=timeout)
+    print(f"Found {len(streams)} streams:")
+    
     eeg_stream = None
-    for st in streams:
+    for i, st in enumerate(streams):
+        print(f"Stream {i}: type={st.type()}, name={st.name()}, channels={st.channel_count()}")
         if st.type() == "EEG" and st.channel_count() == 4:
             eeg_stream = st
             break
 
-    if eeg_stream is None:
-        raise RuntimeError("No 4‑channel EEG stream found. Is Muse 2 LSL running?")
+        if eeg_stream is None:
+            raise RuntimeError("No 4‑channel EEG stream found. Is Muse 2 LSL running?")
 
     _inlet = StreamInlet(eeg_stream)
     print(f"Inlet created → {eeg_stream.name()}")
